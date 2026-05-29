@@ -1,19 +1,42 @@
+// app/api/tally-webhook/route.js
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL, // <-- Sesuaikan dengan file .env Anda
+  process.env.NEXT_PUBLIC_SUPABASE_URL, // ──> 🔑 Pastikan env URL benar
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
+// 🛠️ FUNGSI HELPER YANG SUDAH DIOPTIMALKAN & SANGAT AMAN
 const getVal = (fields, labelName) => {
   if (!fields || !Array.isArray(fields)) return null;
-  const field = fields.find((f) => f.label === labelName);
-  if (!field) return null;
 
-  if (Array.isArray(field.value) && field.value[0]?.url) {
-    return field.value[0].url;
+  // Pencocokan label yang kebal dari spasi tidak sengaja & huruf besar-kecil
+  const field = fields.find(
+    (f) => f.label.trim().toLowerCase() === labelName.trim().toLowerCase(),
+  );
+  if (!field || field.value === undefined || field.value === null) return null;
+
+  // 1. Jika tipenya FILE_UPLOAD (Mengambil string URL langsung)
+  if (field.type === "FILE_UPLOAD" && Array.isArray(field.value)) {
+    return field.value[0]?.url || null;
   }
+
+  // 2. 🔑 KUNCI UTAMA: Jika tipenya DROPDOWN / MULTIPLE_CHOICE / RADIO
+  // Fungsi ini akan mencari teks asli di dalam array 'options' berdasarkan ID yang dicentang user
+  if (
+    (field.type === "DROPDOWN" ||
+      field.type === "MULTIPLE_CHOICE" ||
+      field.type === "RADIO") &&
+    Array.isArray(field.value)
+  ) {
+    const selectedId = field.value[0];
+    if (field.options && Array.isArray(field.options)) {
+      const optionMatched = field.options.find((opt) => opt.id === selectedId);
+      return optionMatched ? optionMatched.text : selectedId; // Mengembalikan teks asli (Contoh: "Nusa Jaya", "BARU", "FIT")
+    }
+  }
+
   return field.value;
 };
 
@@ -21,7 +44,6 @@ export async function POST(request) {
   try {
     const body = await request.json();
 
-    // Validasi struktur data dari Tally
     if (!body || !body.data || !body.data.fields) {
       return NextResponse.json(
         { success: false, error: "Format data Tally tidak valid" },
@@ -32,17 +54,20 @@ export async function POST(request) {
     const fields = body.data.fields;
     const submissionId = body.data.submissionId;
 
-    // Ambil data dasar (Diberikan proteksi "|| ''" agar tidak bernilai null)
+    // Ambil data (Gunakan nama label yang 100% sama dengan di dashboard Tally Anda!)
     const nikKtp = getVal(fields, "NIK KTP");
     const namaDepan = getVal(fields, "Nama Depan") || "";
     const namaBelakang = getVal(fields, "Nama Belakang") || "";
-
-    // Penggabungan nama yang aman dari error .trim()
     const namaLengkap = `${namaDepan} ${namaBelakang}`.trim() || "TANPA NAMA";
 
+    // Mencegah eror database jika NIK kosong
     if (!nikKtp) {
       return NextResponse.json(
-        { success: false, error: "NIK KTP wajib diisi" },
+        {
+          success: false,
+          error:
+            "Gagal memproses: Kolom NIK KTP tidak ditemukan di form atau kosong!",
+        },
         { status: 400 },
       );
     }
@@ -68,15 +93,15 @@ export async function POST(request) {
       jenis_pengajuan: getVal(fields, "Jenis Pengajuan") || "SIMPER",
       status_mcu: getVal(fields, "Status MCU") || "UNFIT",
       tanggal_mcu: getVal(fields, "Tanggal MCU") || null,
-      upload_foto: getVal(fields, "Upload Foto") || null,
-      upload_ktp: getVal(fields, "Upload KTP") || null,
+      upload_foto: getVal(fields, "Upload Foto"), // Otomatis berupa string URL / null dari helper baru
+      upload_ktp: getVal(fields, "Upload KTP"), // Otomatis berupa string URL / null dari helper baru
       submitted_at: body.data.createdAt || new Date().toISOString(),
     });
 
     if (errPengajuan)
       throw new Error(`Gagal ke tabel pengajuan: ${errPengajuan.message}`);
 
-    // 3. Proses Otoritas Alat (P, I, R, F)
+    // 3. Proses Otoritas Alat (Menggunakan Bulk Insert agar anti-timeout)
     const daftarJenisAlat = [
       "Light Vehicle",
       "Dump Truck",
@@ -123,24 +148,23 @@ export async function POST(request) {
       }
     }
 
-    // Jika ada unit yang dicentang, kirim semuanya sekaligus dalam satu request!
     if (bulkUnitData.length > 0) {
       const { error: errBulkUnit } = await supabase
         .from("pengajuan_unit")
         .insert(bulkUnitData);
-
-      if (errBulkUnit) {
+      if (errBulkUnit)
         throw new Error(
           `Gagal ke tabel pengajuan_unit: ${errBulkUnit.message}`,
         );
-      }
     }
+
     return NextResponse.json(
-      { success: true, message: "Data berhasil diproses tanpa error!" },
+      { success: true, message: "Data berhasil diproses!" },
       { status: 200 },
     );
   } catch (error) {
     console.error("Fatal Webhook Error:", error.message);
+    // Kembalikan error message asli ke log Tally agar Anda bisa membacanya dengan mudah di dashboard Tally
     return NextResponse.json(
       { success: false, error: error.message },
       { status: 500 },
