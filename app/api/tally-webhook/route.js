@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_URL, // <-- Sesuaikan dengan file .env Anda
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
@@ -41,7 +41,6 @@ export async function POST(request) {
     const namaLengkap = `${namaDepan} ${namaBelakang}`.trim() || "TANPA NAMA";
 
     if (!nikKtp) {
-      console.error("Peringatan: NIK KTP Kosong!");
       return NextResponse.json(
         { success: false, error: "NIK KTP wajib diisi" },
         { status: 400 },
@@ -102,6 +101,8 @@ export async function POST(request) {
       { kode: "F", nama: "FULL" },
     ];
 
+    const bulkUnitData = [];
+
     for (const status of daftarStatusOtoritas) {
       for (const alat of daftarJenisAlat) {
         const namaLabelTally = `Otoritas (${status.kode}) (${alat})`;
@@ -110,7 +111,7 @@ export async function POST(request) {
         if (fieldTally && Array.isArray(fieldTally.value)) {
           for (const merkYangDicentang of fieldTally.value) {
             if (merkYangDicentang) {
-              await supabase.from("pengajuan_unit").insert({
+              bulkUnitData.push({
                 submission_id: submissionId,
                 status_otoritas: status.nama,
                 jenis_kategori: alat.toUpperCase(),
@@ -122,6 +123,18 @@ export async function POST(request) {
       }
     }
 
+    // Jika ada unit yang dicentang, kirim semuanya sekaligus dalam satu request!
+    if (bulkUnitData.length > 0) {
+      const { error: errBulkUnit } = await supabase
+        .from("pengajuan_unit")
+        .insert(bulkUnitData);
+
+      if (errBulkUnit) {
+        throw new Error(
+          `Gagal ke tabel pengajuan_unit: ${errBulkUnit.message}`,
+        );
+      }
+    }
     return NextResponse.json(
       { success: true, message: "Data berhasil diproses tanpa error!" },
       { status: 200 },

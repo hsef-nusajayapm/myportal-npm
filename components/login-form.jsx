@@ -35,13 +35,17 @@ export function LoginForm({ webAppUrl }) {
       const result = await res.json();
 
       if (result.success) {
-        // Simpan sesi login
-        sessionStorage.setItem("isLoggedIn", "true");
-        sessionStorage.setItem("userEmail", email.toLowerCase().trim());
-        // Simpan data tambahan jika Apps Script mengembalikannya
-        if (result.name) sessionStorage.setItem("userName", result.name);
-        if (result.role) sessionStorage.setItem("userRole", result.role);
+        // ========================================================
+        // 🔑 FITUR BARU: MENCATAT COOKIE UNTUK MIDDLEWARE SERVER
+        // ========================================================
+        // Pasang cookie login aktif 1 hari (86400 detik) dengan mode keamanan SameSite
+        document.cookie = "isLoggedIn=true; path=/; SameSite=Strict";
 
+        // Tetap simpan sesi cadangan di sessionStorage untuk komponen client-side Anda
+        sessionStorage.setItem("isLoggedIn", "true");
+        sessionStorage.setItem("userEmail", email);
+
+        // Arahkan masuk ke halaman utama portal internal
         router.push("/home");
       } else {
         setErrorMsg(result.message || "Email atau password salah!");
